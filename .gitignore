@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Environment files (keep example)
+.env
+.env.*
+!.env.example
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Runtime data & logs (keep config like pid_alias.json)
+data/token.json
+data/run_pipeline.log
+data/orchestrate_current.log
+data/devices.json
+data/device_cve_check.json
+data/upgrade-suggestions.json
+data/*.eml
+data/*.bak
+data/*pre_restore*
+data/*.tgz
+data/history/
+
+# Screenshots from scraping
+screenshots/
+
+# Backups / large local artifacts
+backup_before_restructure_*.tgz
+backup_*.tgz
+
+# Local caches / misc
+cookies.txt
+google-chrome-stable_current_amd64.deb
+
+# Ansible inventory (keep an example instead)
+ansible/inventory.ini

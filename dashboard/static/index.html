@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>retrievos Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/static/style.css?v=20250822" />
+</head>
+<body>
+  <header>
+    <h1>retrievos Dashboard</h1>
+    <div class="flex" style="gap:16px;">
+      <div><small id="latest-batch-label">Batch: -</small></div>
+      <div>
+        <select id="batch-select"></select>
+      </div>
+      <button id="refresh-btn">Refresh</button>
+      <button id="theme-toggle" title="Toggle light/dark">Theme</button>
+      <button id="density-toggle" title="Toggle density">Density</button>
+    </div>
+  </header>
+  <main>
+    <div class="grid cols-3" id="summary-cards">
+      <div class="card"><h2>Devices</h2><div id="stat-devices" class="big"></div><small id="stat-devices-sub"></small></div>
+      <div class="card"><h2>Upgrades Needed</h2><div id="stat-upgrades"></div><small id="stat-upgrades-sub"></small></div>
+      <div class="card"><h2>Critical CVEs</h2><div id="stat-critical"></div><small id="stat-critical-sub"></small></div>
+    </div>
+
+    <div class="chart-area" id="charts">
+      <div class="chart-card"><strong style="font-size:12px;">Critical/High Trend</strong><canvas id="trend-spark" width="240" height="60"></canvas></div>
+      <div class="chart-card"><strong style="font-size:12px;">Severity Distribution</strong><canvas id="severity-pie" width="240" height="160"></canvas><div class="legend" id="severity-legend"></div></div>
+      <div class="chart-card"><strong style="font-size:12px;">Upgrade Status</strong><canvas id="upgrade-pie" width="240" height="160"></canvas></div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <h2>Devices Table</h2>
+      <div class="toolbar" style="flex-direction:column; align-items:stretch; gap:8px;">
+        <div class="controls-row">
+          <input id="filter-host" placeholder="Host" style="flex:1;min-width:120px;" />
+          <input id="filter-model" placeholder="Model" style="flex:1;min-width:120px;" />
+          <input id="filter-rec" placeholder="Recommendation" style="flex:1;min-width:140px;" />
+          <label style="font-size:11px;">Sev:
+            <input type="checkbox" class="sev-filter" value="Critical" checked> C
+            <input type="checkbox" class="sev-filter" value="High" checked> H
+            <input type="checkbox" class="sev-filter" value="Medium" checked> M
+            <input type="checkbox" class="sev-filter" value="Low" checked> L
+          </label>
+          <button id="clear-filter">Clear</button>
+          <button id="export-csv">CSV</button>
+          <button id="export-json">JSON</button>
+          <div style="position:relative;">
+            <button id="columns-btn">Cols</button>
+            <div id="columns-menu" style="display:none; position:absolute; top:34px; right:0; background:var(--panel); border:1px solid #2f3743; padding:6px 10px; border-radius:8px; font-size:12px; box-shadow:0 4px 12px rgba(0,0,0,.4);">
+              <label><input type="checkbox" data-col="alias" checked> Alias</label><br>
+              <label><input type="checkbox" data-col="model" checked> Model</label><br>
+              <label><input type="checkbox" data-col="platform" checked> Platform</label><br>
+              <label><input type="checkbox" data-col="recommended_version" checked> Recommended</label><br>
+              <label><input type="checkbox" data-col="designation" checked> Designation</label><br>
+              <label><input type="checkbox" data-col="rec" checked> Rec</label><br>
+              <label><input type="checkbox" data-col="cpu_usage" checked> CPU</label><br>
+              <label><input type="checkbox" data-col="ports" checked> Ports</label><br>
+              <label><input type="checkbox" data-col="critical" checked> Critical</label><br>
+              <label><input type="checkbox" data-col="high" checked> High</label><br>
+              <label><input type="checkbox" data-col="uptime" checked> Uptime</label><br>
+              <label><input type="checkbox" data-col="eol" checked> EoL</label><br>
+              <label><input type="checkbox" data-col="url" checked> URL</label>
+            </div>
+          </div>
+        </div>
+        <div class="legend" id="sev-legend"></div>
+      </div>
+  <div class="table-wrap">
+        <table id="devices-table">
+          <thead>
+            <tr>
+      <th class="col-host" data-sort="host">Host</th>
+              <th data-col="alias" data-sort="alias_name">Alias</th>
+              <th data-col="model" data-sort="model">Model</th>
+              <th data-col="platform" data-sort="platform">Platform</th>
+              <th data-sort="current_version">Current</th>
+              <th data-col="recommended_version" data-sort="recommended_version">Recommended</th>
+              <th data-col="designation" data-sort="release_designation">Designation</th>
+              <th data-col="rec" data-sort="recommendation">Rec</th>
+              <th data-col="cpu_usage" data-sort="cpu_usage">CPU</th>
+              <th data-col="ports" data-sort="connected_count">Ports</th>
+              <th data-col="critical" data-sort="cve_critical">Critical</th>
+              <th data-col="high" data-sort="cve_high">High</th>
+              <th data-col="uptime" data-sort="uptime">Uptime</th>
+              <th data-col="eol" data-sort="end_of_life">EoL</th>
+              <th data-col="url">Image URL</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <h2>Logs & Email</h2>
+      <div class="flex" style="gap:8px;">
+        <button id="view-log-btn">View Log</button>
+        <button id="view-mail-btn">View Mail</button>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal-backdrop" id="modal">
+    <div class="modal">
+      <span class="close-btn" id="modal-close">✕</span>
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+  <div class="side-drawer" id="side-drawer">
+    <span class="drawer-close" id="drawer-close">✕</span>
+    <div id="drawer-body" style="font-size:12px;"></div>
+  </div>
+
+  <script src="/static/app.js?v=20250822"></script>
+</body>
+</html>

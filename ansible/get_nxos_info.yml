@@ -1,0 +1,130 @@
+- name: Get NX-OS model & version (from inventory PID) and update devices.json
+  hosts: nxos
+  gather_facts: false
+  collections:
+    - cisco.nxos
+
+  vars:
+    devices_json_path: "../data/devices.json"
+
+  tasks:
+    - name: Run comprehensive show commands
+      nxos_command:
+        commands:
+          - show version
+          - show inventory
+          - show interface status
+          - show vlan
+          - show clock
+          - show logging last 50
+          - show processes cpu
+      register: nxos_out
+
+    - name: Extract model and version from outputs
+      vars:
+        # Version from "show version" (first command)
+        ver_out: "{{ nxos_out.stdout[0] | default('') }}"
+        inv_out: "{{ nxos_out.stdout[1] | default('') }}"
+        int_out: "{{ nxos_out.stdout[2] | default('') }}"
+        vlan_out: "{{ nxos_out.stdout[3] | default('') }}"
+        clock_out: "{{ nxos_out.stdout[4] | default('') }}"
+        log_out: "{{ nxos_out.stdout[5] | default('') }}"
+        cpu_out: "{{ nxos_out.stdout[6] | default('') }}"
+        
+        version_list: "{{ ver_out | regex_findall('(?mi)^\\s*NXOS:\\s*version\\s*([0-9A-Za-z().-]+)') }}"
+        parsed_version: "{{ version_list | first | default('UNKNOWN') }}"
+
+        # Model from "show inventory" (second command)
+        pid_list: "{{ inv_out | regex_findall('PID:\\s*([^,\\s]+)') }}"
+        parsed_model: "{{ pid_list | first | default('UNKNOWN') }}"
+
+        # Parse additional device info (robust uptime capture)
+        uptime_list: "{{ ver_out | regex_findall('(?im)^(?:System|Kernel) uptime.*? is (.+)$') }}"
+        uptime: "{{ uptime_list | first | default('UNKNOWN') }}"
+        # ensure serial_number is a single scalar string (take first match)
+        serial_number: "{{ (inv_out | regex_findall('SN:\\s*([A-Z0-9]+)') | first) | default('UNKNOWN') }}"
+
+        # Parse interface status - count connected vs disconnected
+        all_interfaces: "{{ int_out | regex_findall('(Eth[0-9/]+|mgmt[0-9]+)\\s+[^\\n]*\\s+(connected|notconnec)') }}"
+        connected_interfaces: "{{ all_interfaces | selectattr('1', 'equalto', 'connected') | list }}"
+        disconnected_interfaces: "{{ all_interfaces | selectattr('1', 'equalto', 'notconnec') | list }}"
+
+        # Parse VLAN info - extract active VLANs
+        active_vlans: "{{ vlan_out | regex_findall('([0-9]+)\\s+([\\w-]+)\\s+active') }}"
+
+        # Parse CPU usage (NX-OS format) - capture first number after 'CPU utilization'
+        cpu_usage_list: "{{ cpu_out | regex_findall('CPU utilization.*?: *([0-9]+)%') }}"
+        cpu_usage: "{{ cpu_usage_list | first | default('N/A') }}"
+      set_fact:
+        device_record:
+          host: "{{ inventory_hostname }}"
+          model: "{{ parsed_model }}"
+          platform: "nxos"
+          version: "{{ parsed_version }}"
+          device_info:
+            nxos_version: "{{ parsed_version }}"
+            serial_number: "{{ serial_number }}"
+            uptime: "{{ uptime }}"
+            clock: "{{ clock_out.strip() }}"
+          interface_summary:
+            total_interfaces: "{{ all_interfaces | length }}"
+            connected: "{{ connected_interfaces | length }}"
+            disconnected: "{{ disconnected_interfaces | length }}"
+            connected_ports: "{{ connected_interfaces | map(attribute='0') | list }}"
+          performance_info:
+            cpu_usage: "{{ cpu_usage }}%"
+          vlan_summary:
+            total_active_vlans: "{{ active_vlans | length }}"
+            vlans: "{{ active_vlans }}"
+
+    - name: Ensure JSON directory exists
+      file:
+        path: "{{ devices_json_path | dirname }}"
+        state: directory
+      delegate_to: localhost
+      run_once: true
+
+    - name: Check if devices.json exists
+      stat:
+        path: "{{ devices_json_path }}"
+      register: json_stat
+      delegate_to: localhost
+
+    - name: Read existing devices.json (only if present and non-empty)
+      slurp:
+        src: "{{ devices_json_path }}"
+      register: existing_raw
+      delegate_to: localhost
+      when: json_stat.stat.exists and (json_stat.stat.size | int) > 0
+
+    - block:
+        - name: Parse existing JSON (if any)
+          set_fact:
+            existing_devices: >-
+              {{
+                (existing_raw.content | b64decode | from_json)
+                if (json_stat.stat.exists and (json_stat.stat.size | int) > 0)
+                else {}
+              }}
+          delegate_to: localhost
+      rescue:
+        - name: Reset existing_devices on parse failure
+          set_fact:
+            existing_devices: {}
+          delegate_to: localhost
+        - name: Warn about invalid devices.json (auto-reset)
+          debug:
+            msg: "devices.json contained invalid JSON. Resetting to empty and rewriting."
+          delegate_to: localhost
+
+    - name: Merge this host's record (overwrite by hostname)
+      set_fact:
+        updated_devices: "{{ existing_devices | combine({inventory_hostname: device_record}, recursive=False) }}"
+      delegate_to: localhost
+
+    - name: Write merged devices.json (pretty JSON)
+      copy:
+        dest: "{{ devices_json_path }}"
+        content: "{{ updated_devices | to_nice_json }}"
+        mode: "0644"
+      delegate_to: localhost

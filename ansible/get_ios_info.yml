@@ -1,0 +1,150 @@
+---
+- name: Get IOS/IOS-XE model & version (PID from inventory) and update devices.json
+  hosts: ios
+  gather_facts: false
+  collections:
+    - cisco.ios
+
+  vars:
+    devices_json_path: "../data/devices.json"
+
+  tasks:
+    - name: Run comprehensive show commands
+      ios_command:
+        commands:
+          - show version
+          - show inventory
+          - show interfaces status
+          - show vlan
+          - show clock
+          - show login failures
+          - show processes cpu | include CPU
+      register: ios_out
+
+    - name: Extract model and version (with fallbacks)
+      vars:
+        ver_out: "{{ ios_out.stdout[0] | default('') }}"
+        inv_out: "{{ ios_out.stdout[1] | default('') }}"
+        int_out: "{{ ios_out.stdout[2] | default('') }}"
+        vlan_out: "{{ ios_out.stdout[3] | default('') }}"
+        clock_out: "{{ ios_out.stdout[4] | default('') }}"
+        login_failures_out: "{{ ios_out.stdout[5] | default('') }}"
+        cpu_out: "{{ ios_out.stdout[6] | default('') }}"
+
+        # Version (works for IOS-XE and classic IOS)
+        ver_xe_list: "{{ ver_out | regex_findall('(?mi)^\\s*Cisco IOS XE Software.*,\\s*Version\\s*([0-9A-Za-z().]+)') }}"
+        ver_ios_list: "{{ ver_out | regex_findall('(?mi)^\\s*Cisco IOS Software.*,\\s*Version\\s*([0-9A-Za-z().]+)') }}"
+        parsed_version: "{{ (ver_xe_list | first) | default(ver_ios_list | first | default('UNKNOWN')) }}"
+
+        # Model (prefer PID from inventory; else from 'Model number:'; else from 'cisco <MODEL> ( ... )' line)
+        pid_list: "{{ inv_out | regex_findall('(?mi)^\\s*PID:\\s*([^,\\s]+)') }}"
+        model_from_inv: "{{ pid_list | first | default('') }}"
+        model_from_model_number: "{{ ver_out | regex_search('(?mi)^\\s*Model\\s+number\\s*:\\s*([A-Za-z0-9._-]+)', '\\1') | default('') }}"
+        model_from_header: "{{ ver_out | regex_search('(?mi)^\\s*cisco\\s+([A-Za-z0-9._-]+)\\s*\\(', '\\1') | default('') }}"
+        parsed_model: >-
+          {{
+            model_from_inv
+            | default(model_from_model_number, true)
+            | default(model_from_header, true)
+            | default('UNKNOWN', true)
+          }}
+        
+        # Parse additional device info
+        uptime: "{{ ver_out | regex_search('uptime is (.+)', '\\1') | first | default('UNKNOWN') }}"
+        serial_number: "{{ ver_out | regex_search('System serial number\\s*:\\s*([A-Z0-9]+)', '\\1') | first | default('UNKNOWN') }}"
+        vid: "{{ inv_out | regex_search('VID:\\s*([A-Z0-9]+)', '\\1') | first | default('UNKNOWN') }}"
+        
+        # Parse interface status - count connected vs disconnected
+        all_interfaces: "{{ int_out | regex_findall('(Fa[0-9/]+|Gi[0-9/]+)\\s+\\w*\\s+(connected|notconnect)') }}"
+        connected_interfaces: "{{ all_interfaces | selectattr('1', 'equalto', 'connected') | list }}"
+        disconnected_interfaces: "{{ all_interfaces | selectattr('1', 'equalto', 'notconnect') | list }}"
+        
+        # Parse VLAN info - extract active VLANs
+        active_vlans: "{{ vlan_out | regex_findall('([0-9]+)\\s+([\\w-]+)\\s+active') }}"
+        
+        # Parse login failures
+        login_failure_count: "{{ (login_failures_out | regex_search('Total login failures:\\s*([0-9]+)', '\\1')) | default('0') }}"
+        
+        # Parse CPU usage
+        cpu_usage: "{{ (cpu_out | regex_search('CPU utilization for five seconds: ([0-9]+)%', '\\1')) | default('N/A') }}"
+        cpu_one_min: "{{ (cpu_out | regex_search('one minute: ([0-9]+)%', '\\1')) | default('N/A') }}"
+        cpu_five_min: "{{ (cpu_out | regex_search('five minutes: ([0-9]+)%', '\\1')) | default('N/A') }}"
+      set_fact:
+        device_record:
+          host: "{{ inventory_hostname }}"
+          model: "{{ parsed_model }}"
+          platform: "ios"
+          version: "{{ parsed_version }}"
+          device_info:
+            ios_version: "{{ parsed_version }}"
+            serial_number: "{{ serial_number }}"
+            vid: "{{ vid }}"
+            uptime: "{{ uptime }}"
+            clock: "{{ clock_out.strip() }}"
+            clock_synchronized: "{{ 'No' if '*' in clock_out else 'Yes' }}"
+          interface_summary:
+            total_interfaces: "{{ all_interfaces | length }}"
+            connected: "{{ connected_interfaces | length }}"
+            disconnected: "{{ disconnected_interfaces | length }}"
+            connected_ports: "{{ connected_interfaces | map(attribute='0') | list }}"
+          performance_info:
+            cpu_5_sec: "{{ cpu_usage }}%"
+            cpu_1_min: "{{ cpu_one_min }}%"
+            cpu_5_min: "{{ cpu_five_min }}%"
+          vlan_summary:
+            total_active_vlans: "{{ active_vlans | length }}"
+            vlans: "{{ active_vlans }}"
+          security_info:
+            total_login_failures: "{{ login_failure_count }}"
+
+    - name: Ensure JSON directory exists
+      file:
+        path: "{{ devices_json_path | dirname }}"
+        state: directory
+      delegate_to: localhost
+      run_once: true
+
+    - name: Check if devices.json exists
+      stat:
+        path: "{{ devices_json_path }}"
+      register: json_stat
+      delegate_to: localhost
+
+    - name: Read existing devices.json (only if present and non-empty)
+      slurp:
+        src: "{{ devices_json_path }}"
+      register: existing_raw
+      delegate_to: localhost
+      when: json_stat.stat.exists and (json_stat.stat.size | int) > 0
+
+    - block:
+        - name: Parse existing JSON (if any)
+          set_fact:
+            existing_devices: >-
+              {{
+                (existing_raw.content | b64decode | from_json)
+                if (json_stat.stat.exists and (json_stat.stat.size | int) > 0)
+                else {}
+              }}
+          delegate_to: localhost
+      rescue:
+        - name: Reset existing_devices on parse failure
+          set_fact:
+            existing_devices: {}
+          delegate_to: localhost
+        - name: Warn about invalid devices.json (auto-reset)
+          debug:
+            msg: "devices.json contained invalid JSON. Resetting to empty and rewriting."
+          delegate_to: localhost
+
+    - name: Merge this host's record (overwrite by hostname)
+      set_fact:
+        updated_devices: "{{ existing_devices | combine({inventory_hostname: device_record}, recursive=False) }}"
+      delegate_to: localhost
+
+    - name: Write merged devices.json (pretty JSON)
+      copy:
+        dest: "{{ devices_json_path }}"
+        content: "{{ updated_devices | to_nice_json }}"
+        mode: "0644"
+      delegate_to: localhost
