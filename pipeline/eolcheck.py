@@ -2,7 +2,13 @@
 import json, os, sys, re, requests
 from datetime import datetime
 from typing import Dict, Any
-
+proxies = {
+        "http_proxy": "http://proxy.dsi.scom:8080",
+        "https_proxy": "http://proxy.dsi.scom:8080",
+        "no_proxy": "localhost,127.0.0.1,::1"
+    }
+for p in proxies:
+    os.environ[p] = proxies[p]
 # local scraper for End-of-Sale / End-of-Support info
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'scraping'))
 try:

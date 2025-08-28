@@ -51,7 +51,7 @@
         
         # Parse additional device info
         uptime: "{{ ver_out | regex_search('uptime is (.+)', '\\1') | first | default('UNKNOWN') }}"
-        serial_number: "{{ ver_out | regex_search('System serial number\\s*:\\s*([A-Z0-9]+)', '\\1') | first | default('UNKNOWN') }}"
+        serial_number: "{{ (ver_out | regex_search('System serial number\\s*:\\s*([A-Z0-9]+)', '\\1', ignorecase=True) | default([])) | first | default('UNKNOWN') }}"
         vid: "{{ inv_out | regex_search('VID:\\s*([A-Z0-9]+)', '\\1') | first | default('UNKNOWN') }}"
         
         # Parse interface status - count connected vs disconnected
@@ -69,11 +69,14 @@
         cpu_usage: "{{ (cpu_out | regex_search('CPU utilization for five seconds: ([0-9]+)%', '\\1')) | default('N/A') }}"
         cpu_one_min: "{{ (cpu_out | regex_search('one minute: ([0-9]+)%', '\\1')) | default('N/A') }}"
         cpu_five_min: "{{ (cpu_out | regex_search('five minutes: ([0-9]+)%', '\\1')) | default('N/A') }}"
+
+        platform_iosxe: "{{ ver_out | regex_search('Cisco IOS XE', ignorecase=True) }}"
+        parsed_platform: "{{ 'iosxe' if platform_iosxe is defined and platform_iosxe != '' else 'ios' }}"
       set_fact:
         device_record:
           host: "{{ inventory_hostname }}"
           model: "{{ parsed_model }}"
-          platform: "ios"
+          platform: "{{ parsed_platform }}"
           version: "{{ parsed_version }}"
           device_info:
             ios_version: "{{ parsed_version }}"

@@ -40,6 +40,18 @@ DEVICES_JSON = os.path.join(DATA_DIR, 'devices.json')
 PID_ALIAS_JSON = os.path.join(DATA_DIR, 'pid_alias.json')
 
 def _build_driver():
+	proxies = {
+ 
+        "http_proxy": "http://proxy.dsi.scom:8080",
+ 
+        "https_proxy": "http://proxy.dsi.scom:8080",
+ 
+        "no_proxy": "localhost,127.0.0.1,::1"
+ 
+    }
+	for p in proxies:
+		os.environ[p] = proxies[p]
+
 	opts = Options()
 	opts.add_argument('--headless=new')
 	opts.add_argument('--no-sandbox')

@@ -9,7 +9,13 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 DEVICES_JSON = os.path.join(DATA_DIR, 'devices.json')
 OUTPUT_JSON = os.path.join(DATA_DIR, 'device_cve_check.json')
-
+proxies = {
+        "http_proxy": "http://proxy.dsi.scom:8080",
+        "https_proxy": "http://proxy.dsi.scom:8080",
+        "no_proxy": "localhost,127.0.0.1,::1"
+    }
+for p in proxies:
+    os.environ[p] = proxies[p]
 load_dotenv()
 
 CLIENT_ID = os.getenv("CISCO_CLIENT_ID")

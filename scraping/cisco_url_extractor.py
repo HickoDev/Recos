@@ -9,6 +9,7 @@ import time
 import os
 
 import os
+
 BASE_URL = 'https://software.cisco.com/download/home'
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -19,6 +20,13 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
 
 def _build_driver():
+    proxies = {
+        "http_proxy": "http://proxy.dsi.scom:8080",
+        "https_proxy": "http://proxy.dsi.scom:8080",
+        "no_proxy": "localhost,127.0.0.1,::1"
+    }
+    for p in proxies:
+        os.environ[p] = proxies[p]
     chrome_options = Options()
     chrome_options.add_argument('--headless=new')       # ← enable headless
     chrome_options.add_argument('--no-sandbox')
