@@ -109,10 +109,10 @@ def format_email_body(latest_iso: str , batch: list[dict], cve_idx: dict) -> str
 
         rec_counts[rec] = rec_counts.get(rec, 0) + 1
 
-        badge = "🔥 CRITICAL" if crit > 0 else ""
-        lines.append(f"- {host} [{plat}] PID={pid}")
-        lines.append(f"    Version: {cur}  →  {recv}   |  Recommendation: {rec} {badge}")
-        lines.append(f"    CVEs: Critical={crit}, High={high}, Medium={med}, Low={low}")
+        badge = " [CRITICAL]" if crit > 0 else ""
+        lines.append(f"- {host} [{plat}] PID: {pid}")
+        lines.append(f"    Version: {cur}  ->  {recv}   |  Recommendation: {rec}{badge}")
+        lines.append(f"    CVEs: Critical: {crit}, High: {high}, Medium: {med}, Low: {low}")
         if url:
             lines.append(f"    Ref: {url}")
         lines.append("")
@@ -143,7 +143,9 @@ def send_notification():
     msg["Subject"] = f"[retrievos] Upgrade suggestions (batch {subject_ts})"
     msg["From"] = MAIL_FROM
     msg["To"] = ", ".join(MAIL_TO)
-    msg.set_content("Hi,\n\n" + body + "\n\n— retrievos bot\n")
+    ascii_body = ("Hi,\n\n" + body + "\n\n-- retrievos bot\n").encode('ascii', 'ignore').decode('ascii')
+    # Use 7bit since ascii-only content
+    msg.set_content(ascii_body, cte='7bit')
     # Save raw email before sending (so even if send fails we retain content)
     try:
         with open(RAW_EMAIL_LAST, "w", encoding="utf-8") as f:

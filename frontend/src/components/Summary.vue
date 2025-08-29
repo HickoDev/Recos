@@ -65,7 +65,7 @@ async function openLog(){
 async function openMail(){
   if(!selected.value) { modals.value.mail = true; mailText.value = ''; return; }
   try{
-    const r = await fetch(`/api/batch/${encodeURIComponent(selected.value)}/mail`);
+    const r = await fetch(`/api/batch/${encodeURIComponent(selected.value)}/mail?decoded=true`);
     mailText.value = r.ok ? await r.text() : `Error: ${r.status} ${r.statusText}`;
   }catch(err:any){
     mailText.value = String(err?.message||err);

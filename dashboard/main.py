@@ -28,6 +28,8 @@ from dotenv import load_dotenv
 import secrets
 import hmac
 import hashlib
+from email import policy
+from email.parser import Parser
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Load environment from .env if present
@@ -449,13 +451,36 @@ def batch_log(ts: str):
     return PlainTextResponse(content)
 
 @app.get('/api/batch/{ts}/mail')
-def batch_mail(ts: str):
+def batch_mail(ts: str, decoded: bool = False):
     mail_path = os.path.join(MAILS_DIR, f'notification_{ts}.eml')
     if not os.path.exists(mail_path):
         raise HTTPException(status_code=404, detail='mail not found')
     with open(mail_path, 'r', encoding='utf-8', errors='replace') as f:
         content = f.read()
-    return PlainTextResponse(content, media_type='message/rfc822')
+    if not decoded:
+        return PlainTextResponse(content, media_type='message/rfc822')
+    # Decode to human-readable text (quoted-printable, base64, etc.)
+    try:
+        msg = Parser(policy=policy.default).parsestr(content)
+        part = msg.get_body(preferencelist=('plain', 'html'))
+        if part:
+            text = part.get_content()
+        elif msg.get_content_type().startswith('text/'):
+            text = msg.get_content()
+        else:
+            # Fallback: join text parts
+            texts = []
+            for p in msg.walk():
+                if p.get_content_type().startswith('text/'):
+                    try:
+                        texts.append(p.get_content())
+                    except Exception:
+                        pass
+            text = '\n\n'.join(texts) if texts else content
+        return PlainTextResponse(text)
+    except Exception:
+        # On failure, return raw
+        return PlainTextResponse(content, media_type='message/rfc822')
 
 # === Ansible inventory management ===
 def _parse_inventory(path: str) -> Dict[str, List[Dict[str, Any]]]:
