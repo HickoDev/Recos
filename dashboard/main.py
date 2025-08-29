@@ -39,6 +39,7 @@ MAILS_DIR = os.path.join(HIST_DIR, 'mails')
 SCRIPTS_DIR = os.path.join(BASE_DIR, 'scripts')
 ANSIBLE_DIR = os.path.join(BASE_DIR, 'ansible')
 ANSIBLE_INVENTORY = os.path.join(ANSIBLE_DIR, 'inventory.ini')
+ANSIBLE_INVENTORY_TMP = os.path.join(ANSIBLE_DIR, 'inventory.decrypted.ini')
 
 DEVICES_SNAPSHOT = os.path.join(HIST_DIR, 'devices_snapshot.jsonl')
 CVES_SNAPSHOT = os.path.join(HIST_DIR, 'cves_snapshot.jsonl')
@@ -48,6 +49,33 @@ PID_ALIAS_JSON = os.path.join(DATA_DIR, 'pid_alias.json')
 STATIC_DIR = os.path.join(os.path.dirname(__file__), 'static')
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'frontend', 'dist')
 os.makedirs(STATIC_DIR, exist_ok=True)
+
+# Inventory crypto utils (load by path to avoid clashing with external 'ansible' pkg)
+def _load_inventory_crypto():
+    try:
+        import importlib.util
+        path = os.path.join(ANSIBLE_DIR, 'inventory_crypto.py')
+        spec = importlib.util.spec_from_file_location('inventory_crypto_local', path)
+        if not spec or not spec.loader:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # type: ignore
+        return mod
+    except Exception:
+        return None
+
+_inv_crypto = _load_inventory_crypto()
+if _inv_crypto is not None:
+    encrypt_password = getattr(_inv_crypto, 'encrypt_password')
+    decrypt_password = getattr(_inv_crypto, 'decrypt_password')
+    decrypt_inventory_text = getattr(_inv_crypto, 'decrypt_inventory_text')
+else:
+    def encrypt_password(x: str) -> str:  # type: ignore
+        return x
+    def decrypt_password(x: str) -> str:  # type: ignore
+        return x
+    def decrypt_inventory_text(x: str) -> str:  # type: ignore
+        return x
 
 app = FastAPI(title="retrievos dashboard API", version="0.1.0")
 # Session middleware for simple cookie-based auth
@@ -482,6 +510,10 @@ def _write_inventory(path: str, groups: Dict[str, List[Dict[str, Any]]]):
             keys_pref = ['ansible_host', 'ansible_user', 'ansible_password', 'ansible_network_os', 'ansible_connection']
             other_keys = sorted([k for k in v.keys() if k not in keys_pref])
             key_order = [k for k in keys_pref if k in v] + other_keys
+            # Encrypt ansible_password if present and not already encoded
+            if 'ansible_password' in v and v['ansible_password']:
+                v = dict(v)
+                v['ansible_password'] = encrypt_password(str(v['ansible_password']))
             kv = ' '.join([f"{k}={v[k]}" for k in key_order])
             line = host if not kv else f"{host} {kv}"
             lines.append(line)
@@ -493,6 +525,12 @@ def _write_inventory(path: str, groups: Dict[str, List[Dict[str, Any]]]):
 @app.get('/api/inventory')
 def get_inventory():
     groups = _parse_inventory(ANSIBLE_INVENTORY)
+    # Redact passwords for UI
+    for hosts in groups.values():
+        for entry in hosts:
+            vars = entry.get('vars') or {}
+            if 'ansible_password' in vars and vars['ansible_password']:
+                vars['ansible_password'] = '********'
     return {'groups': groups}
 
 @app.get('/api/inventory/{group}')
@@ -500,7 +538,13 @@ def get_inventory_group(group: str):
     groups = _parse_inventory(ANSIBLE_INVENTORY)
     if group not in groups:
         raise HTTPException(status_code=404, detail='group not found')
-    return {'group': group, 'hosts': groups[group]}
+    # Redact passwords
+    hosts = groups[group]
+    for entry in hosts:
+        vars = entry.get('vars') or {}
+        if 'ansible_password' in vars and vars['ansible_password']:
+            vars['ansible_password'] = '********'
+    return {'group': group, 'hosts': hosts}
 
 @app.post('/api/inventory/host')
 def upsert_inventory_host(group: str = Body(...), host: str = Body(...), vars: Dict[str, Any] = Body(default={}), user: Dict[str, Any] = Depends(require_login)):  # type: ignore[override]
@@ -510,19 +554,35 @@ def upsert_inventory_host(group: str = Body(...), host: str = Body(...), vars: D
         raise HTTPException(status_code=400, detail='group and host are required')
     groups = _parse_inventory(ANSIBLE_INVENTORY)
     arr = groups.setdefault(group, [])
-    # update if exists
-    updated = False
-    for entry in arr:
-        if (entry.get('host') or '') == host:
-            entry['vars'] = vars or {}
-            updated = True
-            break
-    if not updated:
-        arr.append({'host': host, 'vars': vars or {}})
+    # Build merged vars if host exists
+    idx = next((i for i,e in enumerate(arr) if (e.get('host') or '') == host), None)
+    incoming = vars or {}
+    if idx is not None:
+        current_vars = dict(arr[idx].get('vars') or {})
+        # If UI sent masked or empty password, keep existing
+        pw_in = str(incoming.get('ansible_password', '') or '')
+        if not pw_in or pw_in == '********':
+            if 'ansible_password' in incoming:
+                incoming = dict(incoming)
+                incoming.pop('ansible_password', None)
+        merged = current_vars
+        merged.update(incoming)
+        arr[idx]['vars'] = merged
+    else:
+        # New entry: accept as is; if password empty/masked, omit field
+        incoming = dict(incoming)
+        pw_in = str(incoming.get('ansible_password', '') or '')
+        if not pw_in or pw_in == '********':
+            incoming.pop('ansible_password', None)
+        arr.append({'host': host, 'vars': incoming})
     try:
         _write_inventory(ANSIBLE_INVENTORY, groups)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f'failed to write inventory: {e}')
+    # Do not echo back the password
+    if vars and 'ansible_password' in vars:
+        vars = dict(vars)
+        vars['ansible_password'] = '********'
     return {'ok': True, 'group': group, 'host': host, 'vars': vars or {}}
 
 @app.delete('/api/inventory/host')

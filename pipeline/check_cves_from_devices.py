@@ -2,6 +2,7 @@ import json
 import requests
 import os
 import re
+import time
 from dotenv import load_dotenv
 
 # Adjust working directory awareness so script can be run from repo root or pipeline/
@@ -23,6 +24,8 @@ CLIENT_SECRET = os.getenv("CISCO_CLIENT_SECRET")
 
 TOKEN_URL = "https://id.cisco.com/oauth2/default/v1/token"
 ADVISORY_URL = "https://apix.cisco.com/security/advisories/v2/OSType"
+REQ_TIMEOUT = int(os.getenv('CISCO_API_TIMEOUT', '20'))  # seconds
+MAX_RETRIES = int(os.getenv('CISCO_API_RETRIES', '2'))
 
 # --- Version normalization (mirror of pipeline) ---
 RE_IOS_PAREN = re.compile(r"^(\d+)\.(\d+)\((\d+)\)([A-Za-z]+)?(\d+)?$")
@@ -67,15 +70,27 @@ def version_variants(platform: str, v: str):
 
 # 1. Get Token
 def get_token():
+    if not CLIENT_ID or not CLIENT_SECRET:
+        print("[cves] CISCO_CLIENT_ID/SECRET not set; skipping CVE fetch.")
+        return None
     data = {
         "grant_type": "client_credentials",
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    r = requests.post(TOKEN_URL, data=data, headers=headers)
-    r.raise_for_status()
-    return r.json()["access_token"]
+    last_err = None
+    for attempt in range(1, MAX_RETRIES + 2):
+        try:
+            r = requests.post(TOKEN_URL, data=data, headers=headers, timeout=REQ_TIMEOUT)
+            r.raise_for_status()
+            return r.json().get("access_token")
+        except Exception as e:
+            last_err = e
+            print(f"[cves] token attempt {attempt} failed: {e}")
+            time.sleep(min(2 * attempt, 5))
+    print(f"[cves] giving up obtaining token: {last_err}")
+    return None
 
 # 2. Get advisories for platform + version
 def get_advisories(token, platform, version):
@@ -87,14 +102,22 @@ def get_advisories(token, platform, version):
     # Try canonical and alternative variants for better match
     for ver in version_variants(platform, version):
         params = {"version": ver}
-        r = requests.get(url, headers=headers, params=params)
+        try:
+            r = requests.get(url, headers=headers, params=params, timeout=REQ_TIMEOUT)
+        except Exception as e:
+            print(f"[cves] request error for {platform} {ver}: {e}")
+            continue
         if r.status_code == 200:
             adv = r.json().get("advisories", [])
             if adv:
                 return adv
         # Continue trying other variants on failure or empty result
     # Final attempt with original version
-    r = requests.get(url, headers=headers, params={"version": version})
+    try:
+        r = requests.get(url, headers=headers, params={"version": version}, timeout=REQ_TIMEOUT)
+    except Exception as e:
+        print(f"[cves] final request error for {platform} {version}: {e}")
+        return []
     if r.status_code != 200:
         print(f"⚠️ Error for {platform} {version}: {r.status_code}")
         return []
@@ -140,15 +163,31 @@ def organize_by_severity(advisories):
 # 4. Main
 def main():
     # Load devices.json
+    if not os.path.exists(DEVICES_JSON):
+        print(f"[cves] {DEVICES_JSON} not found; nothing to check.")
+        with open(OUTPUT_JSON, "w") as f:
+            json.dump({}, f)
+        return
     with open(DEVICES_JSON) as f:
         devices = json.load(f)
+    if not isinstance(devices, dict):
+        print("[cves] devices.json is not an object; skipping CVE check.")
+        with open(OUTPUT_JSON, "w") as f:
+            json.dump({}, f)
+        return
 
     token = get_token()
+    if not token:
+        print("[cves] no token; writing empty CVE results.")
+        with open(OUTPUT_JSON, "w") as f:
+            json.dump({}, f)
+        return
     output = {}
 
     for name, device in devices.items():
         platform = device["platform"]
         version = device["version"]
+        print(f"[cves] querying {name} ({platform} {version})…")
         advisories = get_advisories(token, platform, version)
         output[name] = {
             "model": device["model"],
