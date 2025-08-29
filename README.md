@@ -30,8 +30,8 @@ sudo apt install -y chromium-browser || sudo apt install -y chromium
 ### 2) Clone and set up Python venv
 
 ```bash
-git clone <your-fork-or-repo-url> retrievos
-cd retrievos
+git clone https://github.com/HickoDev/Recos.git
+cd Recos
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
